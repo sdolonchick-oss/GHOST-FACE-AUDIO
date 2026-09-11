@@ -1,446 +1,321 @@
-let ctx = null;
-let stream = null;
+let ctx=null,stream=null,source=null,inputGain=null,master=null;
+let analyser=null,delayNode=null,feedback=null,distortion=null;
+let low=null,high=null,running=false,raf=0;
 
-let source = null;
-let inputGain = null;
-let master = null;
-let analyser = null;
+const $=x=>document.getElementById(x);
 
-let low = null;
-let high = null;
-let distortion = null;
-let delayNode = null;
-let feedback = null;
+const ids=["pitch","gain","dark","dist","echo","delay","volume"];
 
-let running = false;
-let raf = null;
-
-const $ = id => document.getElementById(id);
-
-const ids = ["pitch", "gain", "dark", "dist", "echo", "delay"];
-
-function labels() {
-    if ($("pitch")) $("pitchV").textContent =
-        Number($("pitch").value).toFixed(2) + "×";
-
-    if ($("gain")) $("gainV").textContent =
-        Number($("gain").value).toFixed(2) + "×";
-
-    if ($("dark")) $("darkV").textContent =
-        Number($("dark").value) + "%";
-
-    if ($("dist")) $("distV").textContent =
-        Number($("dist").value) + "%";
-
-    if ($("echo")) $("echoV").textContent =
-        Number($("echo").value) + "%";
-
-    if ($("delay")) $("delayV").textContent =
-        Number($("delay").value).toFixed(2) + "s";
+function labels(){
+  $("pitchV").textContent=(+pitch.value).toFixed(2)+"×";
+  $("gainV").textContent=(+gain.value).toFixed(1)+"×";
+  $("darkV").textContent=dark.value+"%";
+  $("distV").textContent=dist.value+"%";
+  $("echoV").textContent=echo.value+"%";
+  $("delayV").textContent=(+delay.value).toFixed(2)+"s";
+  $("volumeV").textContent=volume.value+"%";
 }
 
-function makeCurve(amount) {
-    const n = 44100;
-    const curve = new Float32Array(n);
-    const k = Number(amount) * 25;
+function outputVolume(){
+  if(!master) return;
 
-    for (let i = 0; i < n; i++) {
-        const x = i * 2 / n - 1;
+  const v=Number(volume.value)/100;
 
-        if (k === 0) {
-            curve[i] = x;
-        } else {
-            curve[i] = Math.tanh(k * x) / Math.tanh(k);
-        }
-    }
-
-    return curve;
+  // Максимум специально ограничен, чтобы телефон не начал свистеть
+  master.gain.setTargetAtTime(
+    Math.min(v,0.35),
+    ctx.currentTime,
+    0.03
+  );
 }
 
-function applySettings() {
-    if (!ctx || !running) return;
-
-    const now = ctx.currentTime;
-
-    const pitch = Number($("pitch")?.value || 1);
-    const gain = Number($("gain")?.value || 1);
-    const dark = Number($("dark")?.value || 0);
-    const dist = Number($("dist")?.value || 0);
-
-    // Echo специально ограничиваем
-    const echo = Math.min(
-        Number($("echo")?.value || 0),
-        25
-    );
-
-    const delay = Math.min(
-        Number($("delay")?.value || 0),
-        1
-    );
-
-    if (inputGain) {
-        inputGain.gain.setTargetAtTime(
-            Math.min(gain, 1.5),
-            now,
-            0.03
-        );
-    }
-
-    if (low) {
-        low.frequency.setTargetAtTime(
-            180 + dark * 4,
-            now,
-            0.03
-        );
-    }
-
-    if (high) {
-        high.frequency.setTargetAtTime(
-            Math.max(700, 1900 - dark * 15),
-            now,
-            0.03
-        );
-    }
-
-    if (distortion) {
-        distortion.curve = makeCurve(dist);
-    }
-
-    if (delayNode) {
-        delayNode.delayTime.setTargetAtTime(
-            delay,
-            now,
-            0.03
-        );
-    }
-
-    if (feedback) {
-        feedback.gain.setTargetAtTime(
-            echo / 100,
-            now,
-            0.03
-        );
-    }
-}
-
-async function start() {
-    if (running) {
-        await stop();
-        return;
-    }
-
-    try {
-        if (!navigator.mediaDevices ||
-            !navigator.mediaDevices.getUserMedia) {
-            throw new Error(
-                "Браузер не поддерживает микрофон."
-            );
-        }
-
-        const AudioContext =
-            window.AudioContext ||
-            window.webkitAudioContext;
-
-        if (!AudioContext) {
-            throw new Error(
-                "Web Audio не поддерживается."
-            );
-        }
-
-        ctx = new AudioContext();
-
-        if (ctx.state === "suspended") {
-            await ctx.resume();
-        }
-
-        stream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-                echoCancellation: false,
-                noiseSuppression: false,
-                autoGainControl: false,
-                channelCount: 1
-            },
-            video: false
-        });
-
-        source = ctx.createMediaStreamSource(stream);
-
-        inputGain = ctx.createGain();
-        master = ctx.createGain();
-        analyser = ctx.createAnalyser();
-
-        analyser.fftSize = 1024;
-
-        // ВАЖНО:
-        // Очень тихий выход, чтобы телефон не заводился.
-        master.gain.value = 0.18;
-
-        low = ctx.createBiquadFilter();
-        low.type = "lowpass";
-        low.frequency.value = 220;
-        low.Q.value = 0.7;
-
-        high = ctx.createBiquadFilter();
-        high.type = "highshelf";
-        high.frequency.value = 1900;
-        high.gain.value = 0;
-
-        distortion = ctx.createWaveShaper();
-        distortion.oversample = "4x";
-        distortion.curve = makeCurve(
-            Number($("dist")?.value || 0)
-        );
-
-        delayNode = ctx.createDelay(5);
-        feedback = ctx.createGain();
-
-        // Echo по умолчанию полностью выключен
-        feedback.gain.value = 0;
-
-        // Микрофон
-        source.connect(inputGain);
-
-        // Основная цепочка
-        inputGain.connect(low);
-        low.connect(high);
-        high.connect(distortion);
-
-        // Основной звук
-        distortion.connect(master);
-
-        // Echo-цепочка
-        distortion.connect(delayNode);
-        delayNode.connect(feedback);
-        feedback.connect(delayNode);
-        delayNode.connect(master);
-
-        // Анализатор
-        distortion.connect(analyser);
-
-        // Выход
-        master.connect(ctx.destination);
-
-        running = true;
-
-        applySettings();
-
-        if ($("power")) {
-            $("power").textContent = "⏹ STOP VOICE";
-        }
-
-        if ($("state")) {
-            $("state").textContent = "ONLINE";
-        }
-
-        draw();
-
-    } catch (err) {
-
-        console.error(err);
-
-        if (stream) {
-            stream.getTracks().forEach(track => {
-                try {
-                    track.stop();
-                } catch (e) {}
-            });
-        }
-
-        stream = null;
-
-        if (ctx) {
-            try {
-                await ctx.close();
-            } catch (e) {}
-        }
-
-        ctx = null;
-        running = false;
-
-        alert(
-            "Микрофон не открылся.\n\n" +
-            "Проверь разрешение микрофона для сайта.\n\n" +
-            "Ошибка: " +
-            (err.message || err.name || "unknown")
-        );
-    }
-}
-
-async function stop() {
-    running = false;
-
-    if (raf) {
-        cancelAnimationFrame(raf);
-        raf = null;
-    }
-
-    if (stream) {
-        stream.getTracks().forEach(track => {
-            try {
-                track.stop();
-            } catch (e) {}
-        });
-
-        stream = null;
-    }
-
-    if (ctx) {
-        try {
-            await ctx.close();
-        } catch (e) {}
-    }
-
-    ctx = null;
-
-    source = null;
-    inputGain = null;
-    master = null;
-    analyser = null;
-    low = null;
-    high = null;
-    distortion = null;
-    delayNode = null;
-    feedback = null;
-
-    if ($("power")) {
-        $("power").textContent = "🎙 START VOICE";
-    }
-
-    if ($("state")) {
-        $("state").textContent = "OFFLINE";
-    }
-
-    if ($("levelText")) {
-        $("levelText").textContent = "000";
-    }
-
-    document.querySelectorAll(".bar").forEach(bar => {
-        bar.style.height = "5%";
+ids.forEach(id=>{
+  const el=$(id);
+  if(el){
+    el.addEventListener("input",()=>{
+      labels();
+      apply();
+      outputVolume();
     });
-}
-
-function draw() {
-    if (!running || !analyser) return;
-
-    const data = new Uint8Array(analyser.fftSize);
-
-    analyser.getByteTimeDomainData(data);
-
-    let sum = 0;
-
-    for (let i = 0; i < data.length; i++) {
-        sum += Math.abs(data[i] - 128);
-    }
-
-    const level = Math.min(
-        100,
-        Math.round((sum / data.length) * 1.8)
-    );
-
-    if ($("levelText")) {
-        $("levelText").textContent =
-            String(level).padStart(3, "0");
-    }
-
-    const bars = document.querySelectorAll(".bar");
-
-    bars.forEach((bar, i) => {
-        const index = Math.floor(
-            i * data.length /
-            Math.max(1, bars.length)
-        );
-
-        const value =
-            Math.abs(data[index] - 128) / 128;
-
-        bar.style.height =
-            Math.max(
-                5,
-                Math.min(100, value * 220)
-            ) + "%";
-    });
-
-    raf = requestAnimationFrame(draw);
-}
-
-// Кнопка START/STOP
-if ($("power")) {
-    $("power").addEventListener("click", start);
-}
-
-// Ползунки
-ids.forEach(id => {
-    const element = $(id);
-
-    if (element) {
-        element.addEventListener("input", () => {
-            labels();
-
-            if (running) {
-                applySettings();
-            }
-        });
-    }
+  }
 });
 
 labels();
 
-// Пресеты
-const presets = {
-    killer: [0.72, 1.20, 45, 18, 0, 0],
-    ghost: [1.12, 1.10, 28, 65, 0, 0],
-    demon: [0.48, 1.40, 85, 70, 0, 0],
-    robot: [1.10, 1.15, 15, 80, 0, 0],
-    deep: [0.55, 1.20, 70, 20, 0, 0],
-    whisper: [1.48, 0.60, 65, 75, 0, 0]
+function makeCurve(amount){
+  const n=44100;
+  const c=new Float32Array(n);
+  const k=1+amount*25;
+
+  for(let i=0;i<n;i++){
+    let x=i*2/n-1;
+    c[i]=Math.tanh(k*x)/Math.tanh(k);
+  }
+
+  return c;
+}
+
+function apply(){
+  if(!ctx) return;
+
+  inputGain.gain.setTargetAtTime(
+    +gain.value,
+    ctx.currentTime,
+    .02
+  );
+
+  low.gain.setTargetAtTime(
+    -28*(+dark.value/100),
+    ctx.currentTime,
+    .03
+  );
+
+  high.gain.setTargetAtTime(
+    (+pitch.value-1)*22,
+    ctx.currentTime,
+    .03
+  );
+
+  distortion.curve=makeCurve(+dist.value/100);
+
+  delayNode.delayTime.setTargetAtTime(
+    +delay.value,
+    ctx.currentTime,
+    .03
+  );
+
+  feedback.gain.setTargetAtTime(
+    (+echo.value/100)*.35,
+    ctx.currentTime,
+    .03
+  );
+
+  outputVolume();
+}
+
+async function start(){
+
+  if(running){
+    stop();
+    return;
+  }
+
+  try{
+
+    if(!navigator.mediaDevices ||
+       !navigator.mediaDevices.getUserMedia){
+
+      alert("Браузер не поддерживает микрофон.");
+      return;
+    }
+
+    ctx=new(window.AudioContext||window.webkitAudioContext)();
+
+    stream=await navigator.mediaDevices.getUserMedia({
+      audio:{
+        echoCancellation:true,
+        noiseSuppression:true,
+        autoGainControl:true
+      }
+    });
+
+    await ctx.resume();
+
+    source=ctx.createMediaStreamSource(stream);
+
+    inputGain=ctx.createGain();
+    master=ctx.createGain();
+    analyser=ctx.createAnalyser();
+
+    // Безопасная стартовая громкость
+    master.gain.value=0.10;
+
+    analyser.fftSize=1024;
+
+    low=ctx.createBiquadFilter();
+    low.type="lowshelf";
+    low.frequency.value=220;
+
+    high=ctx.createBiquadFilter();
+    high.type="highshelf";
+    high.frequency.value=1900;
+
+    distortion=ctx.createWaveShaper();
+    distortion.oversample="4x";
+
+    delayNode=ctx.createDelay(5);
+    feedback=ctx.createGain();
+
+    source.connect(inputGain);
+    inputGain.connect(low);
+    low.connect(high);
+    high.connect(distortion);
+
+    distortion.connect(delayNode);
+
+    delayNode.connect(master);
+
+    delayNode.connect(feedback);
+    feedback.connect(delayNode);
+
+    master.connect(analyser);
+    analyser.connect(ctx.destination);
+
+    running=true;
+
+    $("power").textContent="⏹ STOP VOICE";
+    $("led").parentElement.classList.add("on");
+    $("state").textContent="LIVE";
+
+    // Начинаем с 10%
+    volume.value=10;
+
+    labels();
+    apply();
+    outputVolume();
+    draw();
+
+  }catch(e){
+
+    console.error(e);
+
+    if(stream){
+      stream.getTracks().forEach(t=>t.stop());
+    }
+
+    if(ctx){
+      ctx.close();
+    }
+
+    ctx=null;
+    stream=null;
+
+    alert(
+      "Микрофон не открылся. Проверь разрешение микрофона и HTTPS."
+    );
+  }
+}
+
+function stop(){
+
+  running=false;
+
+  cancelAnimationFrame(raf);
+
+  if(stream){
+    stream.getTracks().forEach(t=>t.stop());
+  }
+
+  if(ctx){
+    ctx.close();
+  }
+
+  ctx=null;
+  stream=null;
+  source=null;
+  inputGain=null;
+  master=null;
+  analyser=null;
+  delayNode=null;
+  feedback=null;
+  distortion=null;
+  low=null;
+  high=null;
+
+  $("power").textContent="🎙 START VOICE";
+  $("led").parentElement.classList.remove("on");
+  $("state").textContent="OFFLINE";
+
+  $("levelText").textContent="000";
+
+  document
+    .querySelectorAll(".bar")
+    .forEach(b=>b.style.height="5%");
+}
+
+function draw(){
+
+  if(!running) return;
+
+  const data=new Uint8Array(analyser.fftSize);
+
+  analyser.getByteTimeDomainData(data);
+
+  let sum=0;
+
+  for(const v of data){
+    let x=(v-128)/128;
+    sum+=x*x;
+  }
+
+  let rms=Math.sqrt(sum/data.length);
+  let level=Math.min(100,Math.round(rms*180));
+
+  $("levelText").textContent=
+    String(level).padStart(3,"0");
+
+  const bars=[
+    ...document.querySelectorAll(".bar")
+  ];
+
+  bars.forEach((b,i)=>{
+    let v=
+      Math.abs(
+        data[(i*8)%data.length]-128
+      )/128;
+
+    b.style.height=
+      Math.max(
+        5,
+        Math.min(100,v*220)
+      )+"%";
+  });
+
+  raf=requestAnimationFrame(draw);
+}
+
+$("power").addEventListener("click",start);
+
+const presets={
+  killer:[.72,1.7,55,45,18,.03],
+  ghost:[1.12,1.5,25,28,65,.16],
+  demon:[.48,2.3,85,70,30,.04],
+  robot:[1,1.25,15,80,85,.02],
+  deep:[.55,1.8,70,20,10,0],
+  whisper:[1.48,4.2,65,75,90,.10]
 };
 
-document.querySelectorAll("[data-p]").forEach(button => {
+document
+  .querySelectorAll("[data-p]")
+  .forEach(b=>{
 
-    button.addEventListener("click", () => {
+    b.onclick=()=>{
 
-        const p = presets[button.dataset.p];
+      const p=presets[b.dataset.p];
 
-        if (!p) return;
+      [
+        pitch.value,
+        gain.value,
+        dark.value,
+        dist.value,
+        echo.value,
+        delay.value
+      ]=p;
 
-        if ($("pitch")) $("pitch").value = p[0];
-        if ($("gain")) $("gain").value = p[1];
-        if ($("dark")) $("dark").value = p[2];
-        if ($("dist")) $("dist").value = p[3];
-        if ($("echo")) $("echo").value = p[4];
-        if ($("delay")) $("delay").value = p[5];
+      labels();
+      apply();
+      outputVolume();
+    };
 
-        labels();
+  });
 
-        if (running) {
-            applySettings();
-        }
-    });
-});
+const bars=$("bars");
 
-// Индикаторы
-const barsBox = $("bars");
+for(let i=0;i<48;i++){
 
-if (barsBox && barsBox.children.length === 0) {
+  const b=document.createElement("div");
 
-    for (let i = 0; i < 48; i++) {
+  b.className="bar";
 
-        const bar = document.createElement("div");
-
-        bar.className = "bar";
-        bar.style.height = "5%";
-
-        barsBox.appendChild(bar);
-    }
+  bars.appendChild(b);
 }
-
-// Начальное состояние
-if ($("state")) {
-    $("state").textContent = "OFFLINE";
-}
-
-if ($("levelText")) {
-    $("levelText").textContent = "000";
-}
-
-console.log("GHOST FACE AUDIO READY");,

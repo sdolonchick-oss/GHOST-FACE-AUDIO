@@ -443,4 +443,4 @@ if ($("levelText")) {
     $("levelText").textContent = "000";
 }
 
-console.log("GHOST FACE AUDIO READY");
+console.log("GHOST FACE AUDIO READY");,

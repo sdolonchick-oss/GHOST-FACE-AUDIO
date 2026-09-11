@@ -15,37 +15,33 @@ let feedback = null;
 let running = false;
 let raf = null;
 
-const $ = (id) => document.getElementById(id);
+const $ = id => document.getElementById(id);
 
 const ids = ["pitch", "gain", "dark", "dist", "echo", "delay"];
 
 function labels() {
-    const pitch = $("pitch");
-    const gain = $("gain");
-    const dark = $("dark");
-    const dist = $("dist");
-    const echo = $("echo");
-    const delay = $("delay");
+    if ($("pitch")) $("pitchV").textContent =
+        Number($("pitch").value).toFixed(2) + "×";
 
-    if (pitch) $("pitchV").textContent = Number(pitch.value).toFixed(2) + "×";
-    if (gain) $("gainV").textContent = Number(gain.value).toFixed(2) + "×";
-    if (dark) $("darkV").textContent = Number(dark.value) + "%";
-    if (dist) $("distV").textContent = Number(dist.value) + "%";
-    if (echo) $("echoV").textContent = Number(echo.value) + "%";
-    if (delay) $("delayV").textContent = Number(delay.value).toFixed(2) + "s";
+    if ($("gain")) $("gainV").textContent =
+        Number($("gain").value).toFixed(2) + "×";
+
+    if ($("dark")) $("darkV").textContent =
+        Number($("dark").value) + "%";
+
+    if ($("dist")) $("distV").textContent =
+        Number($("dist").value) + "%";
+
+    if ($("echo")) $("echoV").textContent =
+        Number($("echo").value) + "%";
+
+    if ($("delay")) $("delayV").textContent =
+        Number($("delay").value).toFixed(2) + "s";
 }
-
-ids.forEach(id => {
-    const el = $(id);
-    if (el) el.addEventListener("input", labels);
-});
-
-labels();
 
 function makeCurve(amount) {
     const n = 44100;
     const curve = new Float32Array(n);
-
     const k = Number(amount) * 25;
 
     for (let i = 0; i < n; i++) {
@@ -70,14 +66,23 @@ function applySettings() {
     const gain = Number($("gain")?.value || 1);
     const dark = Number($("dark")?.value || 0);
     const dist = Number($("dist")?.value || 0);
-    const echo = Number($("echo")?.value || 0);
-    const delay = Number($("delay")?.value || 0);
+
+    // Echo специально ограничиваем
+    const echo = Math.min(
+        Number($("echo")?.value || 0),
+        25
+    );
+
+    const delay = Math.min(
+        Number($("delay")?.value || 0),
+        1
+    );
 
     if (inputGain) {
         inputGain.gain.setTargetAtTime(
-            gain,
+            Math.min(gain, 1.5),
             now,
-            0.02
+            0.03
         );
     }
 
@@ -97,22 +102,13 @@ function applySettings() {
         );
     }
 
-    if (source) {
-        try {
-            source.playbackRate.value =
-                Math.max(0.45, Math.min(2.0, pitch));
-        } catch (e) {
-            console.log("Playback rate unavailable");
-        }
-    }
-
     if (distortion) {
         distortion.curve = makeCurve(dist);
     }
 
     if (delayNode) {
         delayNode.delayTime.setTargetAtTime(
-            Math.max(0, Math.min(5, delay)),
+            delay,
             now,
             0.03
         );
@@ -120,7 +116,7 @@ function applySettings() {
 
     if (feedback) {
         feedback.gain.setTargetAtTime(
-            Math.min(0.85, echo / 100),
+            echo / 100,
             now,
             0.03
         );
@@ -129,39 +125,34 @@ function applySettings() {
 
 async function start() {
     if (running) {
-        stop();
+        await stop();
         return;
     }
 
     try {
-        // Проверяем поддержку микрофона
         if (!navigator.mediaDevices ||
             !navigator.mediaDevices.getUserMedia) {
-
             throw new Error(
-                "Браузер не поддерживает доступ к микрофону."
+                "Браузер не поддерживает микрофон."
             );
         }
 
-        // Создаём AudioContext
         const AudioContext =
             window.AudioContext ||
             window.webkitAudioContext;
 
         if (!AudioContext) {
             throw new Error(
-                "Браузер не поддерживает Web Audio."
+                "Web Audio не поддерживается."
             );
         }
 
         ctx = new AudioContext();
 
-        // На Android AudioContext иногда запускается suspended
         if (ctx.state === "suspended") {
             await ctx.resume();
         }
 
-        // Запрашиваем микрофон
         stream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: false,
@@ -172,7 +163,6 @@ async function start() {
             video: false
         });
 
-        // Источник микрофона
         source = ctx.createMediaStreamSource(stream);
 
         inputGain = ctx.createGain();
@@ -181,32 +171,36 @@ async function start() {
 
         analyser.fftSize = 1024;
 
-        // Фильтр низких частот
+        // ВАЖНО:
+        // Очень тихий выход, чтобы телефон не заводился.
+        master.gain.value = 0.18;
+
         low = ctx.createBiquadFilter();
         low.type = "lowpass";
         low.frequency.value = 220;
         low.Q.value = 0.7;
 
-        // Фильтр высоких частот
         high = ctx.createBiquadFilter();
         high.type = "highshelf";
         high.frequency.value = 1900;
         high.gain.value = 0;
 
-        // Distortion
         distortion = ctx.createWaveShaper();
         distortion.oversample = "4x";
         distortion.curve = makeCurve(
             Number($("dist")?.value || 0)
         );
 
-        // Echo
-        delayNode = ctx.createDelay(5.0);
+        delayNode = ctx.createDelay(5);
         feedback = ctx.createGain();
 
-        // Подключение
+        // Echo по умолчанию полностью выключен
+        feedback.gain.value = 0;
+
+        // Микрофон
         source.connect(inputGain);
 
+        // Основная цепочка
         inputGain.connect(low);
         low.connect(high);
         high.connect(distortion);
@@ -214,7 +208,7 @@ async function start() {
         // Основной звук
         distortion.connect(master);
 
-        // Echo
+        // Echo-цепочка
         distortion.connect(delayNode);
         delayNode.connect(feedback);
         feedback.connect(delayNode);
@@ -226,28 +220,24 @@ async function start() {
         // Выход
         master.connect(ctx.destination);
 
-        applySettings();
-
         running = true;
 
-        const power = $("power");
-        const state = $("state");
+        applySettings();
 
-        if (power) {
-            power.textContent = "⏹ STOP VOICE";
+        if ($("power")) {
+            $("power").textContent = "⏹ STOP VOICE";
         }
 
-        if (state) {
-            state.textContent = "ONLINE";
+        if ($("state")) {
+            $("state").textContent = "ONLINE";
         }
 
         draw();
 
     } catch (err) {
 
-        console.error("MICROPHONE ERROR:", err);
+        console.error(err);
 
-        // Останавливаем всё, если запуск не удался
         if (stream) {
             stream.getTracks().forEach(track => {
                 try {
@@ -257,7 +247,6 @@ async function start() {
         }
 
         stream = null;
-        source = null;
 
         if (ctx) {
             try {
@@ -268,14 +257,12 @@ async function start() {
         ctx = null;
         running = false;
 
-        const message =
+        alert(
             "Микрофон не открылся.\n\n" +
-            "Проверь разрешение микрофона для сайта " +
-            "и нажми START VOICE ещё раз.\n\n" +
+            "Проверь разрешение микрофона для сайта.\n\n" +
             "Ошибка: " +
-            (err.message || err.name || "unknown");
-
-        alert(message);
+            (err.message || err.name || "unknown")
+        );
     }
 }
 
@@ -315,20 +302,16 @@ async function stop() {
     delayNode = null;
     feedback = null;
 
-    const power = $("power");
-    const state = $("state");
-    const levelText = $("levelText");
-
-    if (power) {
-        power.textContent = "🎙 START VOICE";
+    if ($("power")) {
+        $("power").textContent = "🎙 START VOICE";
     }
 
-    if (state) {
-        state.textContent = "OFFLINE";
+    if ($("state")) {
+        $("state").textContent = "OFFLINE";
     }
 
-    if (levelText) {
-        levelText.textContent = "000";
+    if ($("levelText")) {
+        $("levelText").textContent = "000";
     }
 
     document.querySelectorAll(".bar").forEach(bar => {
@@ -354,10 +337,8 @@ function draw() {
         Math.round((sum / data.length) * 1.8)
     );
 
-    const levelText = $("levelText");
-
-    if (levelText) {
-        levelText.textContent =
+    if ($("levelText")) {
+        $("levelText").textContent =
             String(level).padStart(3, "0");
     }
 
@@ -365,7 +346,8 @@ function draw() {
 
     bars.forEach((bar, i) => {
         const index = Math.floor(
-            i * data.length / Math.max(1, bars.length)
+            i * data.length /
+            Math.max(1, bars.length)
         );
 
         const value =
@@ -381,29 +363,43 @@ function draw() {
     raf = requestAnimationFrame(draw);
 }
 
-// Кнопка запуска
-const powerButton = $("power");
-
-if (powerButton) {
-    powerButton.addEventListener("click", start);
+// Кнопка START/STOP
+if ($("power")) {
+    $("power").addEventListener("click", start);
 }
+
+// Ползунки
+ids.forEach(id => {
+    const element = $(id);
+
+    if (element) {
+        element.addEventListener("input", () => {
+            labels();
+
+            if (running) {
+                applySettings();
+            }
+        });
+    }
+});
+
+labels();
 
 // Пресеты
 const presets = {
-    killer: [0.72, 1.55, 45, 18, 3, 1.0],
-    ghost: [1.12, 1.25, 28, 65, 16, 1.3],
-    demon: [0.48, 2.35, 85, 70, 30, 0.4],
-    robot: [1.10, 1.25, 15, 80, 85, 0.2],
-    deep: [0.55, 1.80, 70, 20, 10, 0.0],
-    whisper: [1.48, 0.42, 65, 75, 90, 1.0]
+    killer: [0.72, 1.20, 45, 18, 0, 0],
+    ghost: [1.12, 1.10, 28, 65, 0, 0],
+    demon: [0.48, 1.40, 85, 70, 0, 0],
+    robot: [1.10, 1.15, 15, 80, 0, 0],
+    deep: [0.55, 1.20, 70, 20, 0, 0],
+    whisper: [1.48, 0.60, 65, 75, 0, 0]
 };
 
 document.querySelectorAll("[data-p]").forEach(button => {
 
     button.addEventListener("click", () => {
 
-        const name = button.dataset.p;
-        const p = presets[name];
+        const p = presets[button.dataset.p];
 
         if (!p) return;
 
@@ -422,24 +418,7 @@ document.querySelectorAll("[data-p]").forEach(button => {
     });
 });
 
-// Если ползунки изменились
-ids.forEach(id => {
-
-    const element = $(id);
-
-    if (element) {
-        element.addEventListener("input", () => {
-
-            labels();
-
-            if (running) {
-                applySettings();
-            }
-        });
-    }
-});
-
-// Создаём индикаторы, если есть контейнер
+// Индикаторы
 const barsBox = $("bars");
 
 if (barsBox && barsBox.children.length === 0) {
@@ -464,4 +443,4 @@ if ($("levelText")) {
     $("levelText").textContent = "000";
 }
 
-console.log("GHOST FACE AUDIO loaded");
+console.log("GHOST FACE AUDIO READY");

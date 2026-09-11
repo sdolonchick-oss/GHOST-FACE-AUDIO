@@ -1,41 +1,25 @@
-let ctx = null,
-  stream = null,
-  source = null,
-  inputGain = null,
-  master = null,
-  analyser = null,
-  delayNode = null,
-  feedback = null,
-  distortion = null,
-  low = null,
-  bass = null,
-  high = null,
-  running = false,
-  raf = 0;
+let ctx = null;
+let stream = null;
+let source = null;
+let inputGain = null;
+let master = null;
+let analyser = null;
+let bass = null;
+let low = null;
+let running = false;
+let raf = 0;
 
-const $ = x => document.getElementById(x);
+const $ = id => document.getElementById(id);
 
-const ids = [
-  "pitch",
-  "gain",
-  "dark",
-  "dist",
-  "echo",
-  "delay",
-  "volume"
-];
+const ids = ["pitch", "gain", "dark", "dist", "echo", "delay"];
 
 function labels() {
   $("pitchV").textContent = (+$("pitch").value).toFixed(2) + "×";
   $("gainV").textContent = (+$("gain").value).toFixed(1) + "×";
   $("darkV").textContent = $("dark").value + "%";
   $("distV").textContent = $("dist").value + "%";
-  $("echoV").textContent = $("echo").value + "%";
-  $("delayV").textContent = (+$("delay").value).toFixed(2) + "s";
-
-  if ($("volume") && $("volumeV")) {
-    $("volumeV").textContent = $("volume").value + "%";
-  }
+  $("echoV").textContent = "OFF";
+  $("delayV").textContent = "OFF";
 }
 
 ids.forEach(id => {
@@ -50,73 +34,36 @@ ids.forEach(id => {
 
 labels();
 
-function makeCurve(amount) {
-  const n = 44100;
-  const c = new Float32Array(n);
-  const k = 1 + amount * 25;
-
-  for (let i = 0; i < n; i++) {
-    const x = i * 2 / n - 1;
-    c[i] = Math.tanh(k * x) / Math.tanh(k);
-  }
-
-  return c;
-}
-
 function apply() {
   if (!ctx) return;
 
-  // Основное усиление
+  // Громкость входа
   inputGain.gain.setTargetAtTime(
-    +$("gain").value,
+    +$("gain").value * 0.7,
     ctx.currentTime,
     0.02
   );
 
-  // Очень глубокий низ
+  // МЯГКИЙ НИЗ
   low.gain.setTargetAtTime(
-    -20 * (+$("dark").value / 100),
+    5,
     ctx.currentTime,
     0.03
   );
 
-  // МОЩНЫЙ BASS
+  // ОЧЕНЬ ГЛУБОКИЙ БАС
   bass.gain.setTargetAtTime(
-    18 + (+$("dark").value * 0.12),
+    16,
     ctx.currentTime,
     0.04
   );
 
-  // Верхние частоты
-  high.gain.setTargetAtTime(
-    (+$("pitch").value - 1) * 18,
+  // Никакого эха и задержки
+  master.gain.setTargetAtTime(
+    0.18,
     ctx.currentTime,
     0.03
   );
-
-  distortion.curve = makeCurve(+$("dist").value / 100);
-
-  delayNode.delayTime.setTargetAtTime(
-    +$("delay").value,
-    ctx.currentTime,
-    0.03
-  );
-
-  feedback.gain.setTargetAtTime(
-    (+$("echo").value / 100) * 0.35,
-    ctx.currentTime,
-    0.03
-  );
-
-  // Громкость выхода
-  if ($("volume")) {
-    const v = +$("volume").value / 100;
-    master.gain.setTargetAtTime(
-      Math.min(0.35, v * 0.35),
-      ctx.currentTime,
-      0.03
-    );
-  }
 }
 
 async function start() {
@@ -141,53 +88,29 @@ async function start() {
     source = ctx.createMediaStreamSource(stream);
 
     inputGain = ctx.createGain();
+    low = ctx.createBiquadFilter();
+    bass = ctx.createBiquadFilter();
     master = ctx.createGain();
     analyser = ctx.createAnalyser();
 
-    analyser.fftSize = 1024;
+    analyser.fftSize = 512;
 
-    // Низкая полка
-    low = ctx.createBiquadFilter();
+    // Срезаем лишний верх
     low.type = "lowshelf";
-    low.frequency.value = 120;
-    low.gain.value = 0;
+    low.frequency.value = 180;
+    low.gain.value = 5;
 
-    // ОТДЕЛЬНЫЙ СУПЕР-БАС
-    bass = ctx.createBiquadFilter();
+    // Ghostface BASS
     bass.type = "peaking";
-    bass.frequency.value = 85;
-    bass.Q.value = 0.85;
-    bass.gain.value = 20;
+    bass.frequency.value = 75;
+    bass.Q.value = 1.1;
+    bass.gain.value = 16;
 
-    // Верх
-    high = ctx.createBiquadFilter();
-    high.type = "highshelf";
-    high.frequency.value = 2200;
-
-    distortion = ctx.createWaveShaper();
-    distortion.oversample = "4x";
-
-    delayNode = ctx.createDelay(5);
-    feedback = ctx.createGain();
-
-    // Начальная громкость
-    master.gain.value = 0.10;
-
-    // Цепочка:
-    // MIC → GAIN → LOW → BASS → HIGH → DISTORTION → DELAY → MASTER
+    // Без задержки
     source.connect(inputGain);
     inputGain.connect(low);
     low.connect(bass);
-    bass.connect(high);
-    high.connect(distortion);
-
-    distortion.connect(delayNode);
-
-    delayNode.connect(master);
-
-    // Эхо
-    delayNode.connect(feedback);
-    feedback.connect(delayNode);
+    bass.connect(master);
 
     master.connect(analyser);
     analyser.connect(ctx.destination);
@@ -208,9 +131,7 @@ async function start() {
 
     console.error(e);
 
-    if (ctx) {
-      ctx.close();
-    }
+    if (ctx) ctx.close();
   }
 }
 
@@ -220,35 +141,29 @@ function stop() {
   cancelAnimationFrame(raf);
 
   if (stream) {
-    stream.getTracks().forEach(t => t.stop());
+    stream.getTracks().forEach(track => track.stop());
   }
 
   if (ctx) {
     ctx.close();
   }
 
-  ctx =
-    stream =
-    source =
-    inputGain =
-    master =
-    analyser =
-    delayNode =
-    feedback =
-    distortion =
-    low =
-    bass =
-    high =
-      null;
+  ctx = null;
+  stream = null;
+  source = null;
+  inputGain = null;
+  master = null;
+  analyser = null;
+  bass = null;
+  low = null;
 
   $("power").textContent = "🎙 START VOICE";
   $("led").parentElement.classList.remove("on");
   $("state").textContent = "OFFLINE";
-
   $("levelText").textContent = "000";
 
   document.querySelectorAll(".bar").forEach(
-    b => b.style.height = "5%"
+    bar => bar.style.height = "5%"
   );
 }
 
@@ -256,22 +171,17 @@ function draw() {
   if (!running) return;
 
   const data = new Uint8Array(analyser.fftSize);
-
   analyser.getByteTimeDomainData(data);
 
   let sum = 0;
 
-  for (const v of data) {
-    const x = (v - 128) / 128;
+  for (const value of data) {
+    const x = (value - 128) / 128;
     sum += x * x;
   }
 
   const rms = Math.sqrt(sum / data.length);
-
-  const level = Math.min(
-    100,
-    Math.round(rms * 180)
-  );
+  const level = Math.min(100, Math.round(rms * 180));
 
   $("levelText").textContent =
     String(level).padStart(3, "0");
@@ -280,17 +190,12 @@ function draw() {
     ...document.querySelectorAll(".bar")
   ];
 
-  bars.forEach((b, i) => {
-    const v =
-      Math.abs(
-        data[(i * 8) % data.length] - 128
-      ) / 128;
+  bars.forEach((bar, i) => {
+    const value =
+      Math.abs(data[(i * 4) % data.length] - 128) / 128;
 
-    b.style.height =
-      Math.max(
-        5,
-        Math.min(100, v * 220)
-      ) + "%";
+    bar.style.height =
+      Math.max(5, Math.min(100, value * 220)) + "%";
   });
 
   raf = requestAnimationFrame(draw);
@@ -298,27 +203,26 @@ function draw() {
 
 $("power").addEventListener("click", start);
 
+// Пресеты — без эха и задержки
 const presets = {
-  killer: [.72, 1.7, 55, 45, 18, .03],
-  ghost: [1.12, 1.5, 25, 28, 65, .16],
-  demon: [.48, 2.3, 85, 70, 30, .04],
-  robot: [1, 1.25, 15, 80, 85, .02],
-  deep: [.55, 1.8, 70, 20, 10, 0],
-  whisper: [1.48, 4.2, 65, 75, 90, .10]
+  killer: [.72, 1.7, 55, 0, 0, 0],
+  ghost: [.90, 1.5, 25, 0, 0, 0],
+  demon: [.65, 2.0, 70, 0, 0, 0],
+  robot: [1, 1.25, 15, 0, 0, 0],
+  deep: [.55, 1.8, 80, 0, 0, 0],
+  whisper: [1.1, 1.3, 65, 0, 0, 0]
 };
 
-document.querySelectorAll("[data-p]").forEach(b => {
-  b.onclick = () => {
-    const p = presets[b.dataset.p];
+document.querySelectorAll("[data-p]").forEach(button => {
+  button.onclick = () => {
+    const p = presets[button.dataset.p];
 
-    [
-      $("pitch").value,
-      $("gain").value,
-      $("dark").value,
-      $("dist").value,
-      $("echo").value,
-      $("delay").value
-    ] = p;
+    $("pitch").value = p[0];
+    $("gain").value = p[1];
+    $("dark").value = p[2];
+    $("dist").value = 0;
+    $("echo").value = 0;
+    $("delay").value = 0;
 
     labels();
     apply();
@@ -328,7 +232,7 @@ document.querySelectorAll("[data-p]").forEach(b => {
 const bars = $("bars");
 
 for (let i = 0; i < 48; i++) {
-  const b = document.createElement("div");
-  b.className = "bar";
-  bars.appendChild(b);
-}
+  const bar = document.createElement("div");
+  bar.className = "bar";
+  bars.appendChild(bar);
+  }

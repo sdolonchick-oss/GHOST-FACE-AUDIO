@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#080707">
+<title>GHOST FACE AUDIO</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="grain"></div>
+
+<main class="app">
+  <header class="header">
+    <div class="skull">☠</div>
+    <div>
+      <h1>GHOST FACE</h1>
+      <h2>AUDIO</h2>
+      <p>VOICE DISTORTION UNIT // 1996</p>
+    </div>
+    <div class="status"><i id="led"></i><span id="state">OFFLINE</span></div>
+  </header>
+
+  <section class="screen">
+    <div class="screen-top"><span>INPUT LEVEL</span><b id="levelText">000</b></div>
+    <div class="bars" id="bars"></div>
+    <div class="screen-bottom">LIVE VOICE PROCESSOR</div>
+  </section>
+
+  <button id="power" class="power">🎙 START VOICE</button>
+
+  <section class="panel">
+    <div class="panel-title">VOICE CHARACTER</div>
+
+    <div class="row">
+      <label>VOICE PITCH <b id="pitchV">1.00×</b></label>
+      <input id="pitch" type="range" min=".45" max="2.2" step=".01" value="1">
+    </div>
+
+    <div class="row">
+      <label>AMPLIFIER <b id="gainV">1.0×</b></label>
+      <input id="gain" type="range" min=".5" max="5" step=".1" value="1">
+    </div>
+
+    <div class="row">
+      <label>DARKNESS <b id="darkV">0%</b></label>
+      <input id="dark" type="range" min="0" max="100" value="0">
+    </div>
+
+    <div class="row">
+      <label>DISTORTION <b id="distV">0%</b></label>
+      <input id="dist" type="range" min="0" max="100" value="0">
+    </div>
+
+    <div class="row">
+      <label>ECHO <b id="echoV">0%</b></label>
+      <input id="echo" type="range" min="0" max="100" value="0">
+    </div>
+
+    <div class="row">
+      <label>DELAY <b id="delayV">0.00s</b></label>
+      <input id="delay" type="range" min="0" max="5" step=".01" value="0">
+    </div>
+  </section>
+
+  <section class="presets">
+    <button data-p="killer">KILLER</button>
+    <button data-p="ghost">GHOST</button>
+    <button data-p="demon">DEMON</button>
+    <button data-p="robot">ROBOT</button>
+    <button data-p="deep">DEEP</button>
+    <button data-p="whisper">WHISPER</button>
+  </section>
+
+  <div class="note">
+    <b>WHISPER:</b> тихая речь автоматически усиливается и получает сильную обработку.
+    <br>Для живого мониторинга лучше использовать наушники.
+  </div>
+
+  <footer>GHOST FACE AUDIO — ORIGINAL WEB VOICE PROCESSOR</footer>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
